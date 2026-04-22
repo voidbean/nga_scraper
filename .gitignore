@@ -1,0 +1,19 @@
+# Authentication - NEVER commit this
+cookies.txt
+
+# Scraped data
+data/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
