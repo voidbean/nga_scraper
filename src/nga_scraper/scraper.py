@@ -24,11 +24,11 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-THREAD_ID = 45974302
-AUTHOR_ID = 150058
-AUTHOR_NAME = "-阿狼-"
-
 BASE_URL = "https://bbs.nga.cn/read.php"
+
+# Default target (can be overridden via CLI)
+DEFAULT_THREAD_ID = 45974302
+DEFAULT_AUTHOR_ID = 150058
 
 # Matches: var __PAGE = {0:'/read.php?...',1:111,2:1,3:20};
 _PAGE_RE = re.compile(
@@ -124,8 +124,8 @@ class NGAScraper:
     def __init__(
         self,
         session: requests.Session,
-        thread_id: int = THREAD_ID,
-        author_id: int = AUTHOR_ID,
+        thread_id: int = DEFAULT_THREAD_ID,
+        author_id: int = DEFAULT_AUTHOR_ID,
         delay: float = 1.5,
         timeout: int = 30,
     ) -> None:

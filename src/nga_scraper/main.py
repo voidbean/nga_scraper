@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .scraper import NGAScraper, build_session, THREAD_ID, AUTHOR_ID, AUTHOR_NAME
+from .scraper import NGAScraper, build_session, DEFAULT_THREAD_ID, DEFAULT_AUTHOR_ID
 from .parser import parse_page
 from .storage import (
     append_posts,
@@ -139,14 +139,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--thread-id",
         type=int,
-        default=THREAD_ID,
-        help=f"帖子 TID（默认 {THREAD_ID}）",
+        default=DEFAULT_THREAD_ID,
+        help=f"帖子 TID（默认 {DEFAULT_THREAD_ID}）",
     )
     parser.add_argument(
         "--author-id",
         type=int,
-        default=AUTHOR_ID,
-        help=f"只看该 UID 的发言（默认 {AUTHOR_ID}）",
+        default=DEFAULT_AUTHOR_ID,
+        help=f"只看该 UID 的发言（默认 {DEFAULT_AUTHOR_ID}）",
     )
     parser.add_argument(
         "--dry-run",
@@ -229,7 +229,7 @@ def main() -> None:
         count = export_markdown(
             thread_id=args.thread_id,
             author_id=args.author_id,
-        )
+        )  # author_name resolved from posts data automatically
         print(f"已导出 {count} 条帖子到 data/posts.md")
         return
 
@@ -242,26 +242,26 @@ def main() -> None:
     if args.full:
         start_page = 1
         end_page = None  # will be discovered from first page
-        clear_posts()
+        clear_posts(args.thread_id, args.author_id)
         logger.info("全量重爬模式：已清空现有数据")
         existing_ids = set()
 
     elif args.pages:
         start_page, end_page = parse_page_range(args.pages)
-        existing_ids = load_existing_post_ids()
+        existing_ids = load_existing_post_ids(args.thread_id, args.author_id)
         logger.info("指定页范围模式：第 %d–%s 页", start_page, end_page or "?")
 
     elif args.start_page:
         start_page = args.start_page
-        existing_ids = load_existing_post_ids()
+        existing_ids = load_existing_post_ids(args.thread_id, args.author_id)
         logger.info("从第 %d 页开始爬取", start_page)
 
     else:
         # Incremental: resume from last scraped page + 1
-        meta = load_metadata()
+        meta = load_metadata(args.thread_id, args.author_id)
         last = meta.get("last_scraped_page", 0)
         start_page = last + 1 if last > 0 else 1
-        existing_ids = load_existing_post_ids()
+        existing_ids = load_existing_post_ids(args.thread_id, args.author_id)
         if last > 0:
             logger.info(
                 "增量模式：从第 %d 页继续（上次爬到第 %d 页）",
@@ -305,7 +305,7 @@ def main() -> None:
 
             # Write to storage
             if not args.dry_run and posts:
-                written, skipped = append_posts(posts, existing_ids)
+                written, skipped = append_posts(posts, existing_ids, args.thread_id, args.author_id)
             elif args.dry_run:
                 written = len(posts)
                 skipped = 0
@@ -327,10 +327,10 @@ def main() -> None:
             if not args.dry_run:
                 update_metadata(
                     last_scraped_page=page_num,
-                    total_pages=scraper.total_pages,
-                    total_posts_scraped=total_written,
                     thread_id=args.thread_id,
                     author_id=args.author_id,
+                    total_pages=scraper.total_pages,
+                    total_posts_scraped=total_written,
                 )
 
             _progress(page_num, scraper.total_pages, total_written, total_skipped, len(posts))
@@ -360,5 +360,5 @@ def main() -> None:
         count = export_markdown(
             thread_id=args.thread_id,
             author_id=args.author_id,
-        )
+        )  # author_name resolved from posts data automatically
         print(f"已导出 {count} 条帖子到 data/posts.md")

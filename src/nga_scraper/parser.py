@@ -20,12 +20,6 @@ from bs4 import BeautifulSoup, Tag
 
 logger = logging.getLogger(__name__)
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-
-THREAD_ID = 45974302
-AUTHOR_ID = 150058
-AUTHOR_NAME = "-阿狼-"
-
 # ── Data models ───────────────────────────────────────────────────────────────
 
 @dataclass
@@ -315,8 +309,8 @@ def _extract_subject(container: Tag, post_index: int) -> str:
 def parse_page(
     html: str,
     page_num: int,
-    thread_id: int = THREAD_ID,
-    author_id: int = AUTHOR_ID,
+    thread_id: int,
+    author_id: int,
     page_size: int = 20,
 ) -> list[Post]:
     """

@@ -27,73 +27,88 @@ logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-DATA_DIR = Path("data")
-POSTS_FILE = DATA_DIR / "posts.jsonl"
-METADATA_FILE = DATA_DIR / "metadata.json"
-MARKDOWN_FILE = DATA_DIR / "posts.md"
+def get_data_paths(thread_id: int, author_id: int) -> tuple[Path, Path, Path, Path]:
+    """
+    Return (data_dir, posts_file, metadata_file, markdown_file) for the given
+    thread/author combination.
+
+    Layout: data/{thread_id}/{author_id}/
+    """
+    data_dir = Path("data") / str(thread_id) / str(author_id)
+    return (
+        data_dir,
+        data_dir / "posts.jsonl",
+        data_dir / "metadata.json",
+        data_dir / "posts.md",
+    )
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def ensure_data_dir() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def ensure_data_dir(thread_id: int, author_id: int) -> None:
+    data_dir, *_ = get_data_paths(thread_id, author_id)
+    data_dir.mkdir(parents=True, exist_ok=True)
 
 
 # ── Metadata ──────────────────────────────────────────────────────────────────
 
-def load_metadata() -> dict:
+def load_metadata(thread_id: int, author_id: int) -> dict:
     """Load metadata.json, returning empty dict if it doesn't exist."""
-    if METADATA_FILE.exists():
-        with METADATA_FILE.open("r", encoding="utf-8") as f:
+    _, _, metadata_file, _ = get_data_paths(thread_id, author_id)
+    if metadata_file.exists():
+        with metadata_file.open("r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
 
-def save_metadata(meta: dict) -> None:
+def save_metadata(meta: dict, thread_id: int, author_id: int) -> None:
     """Atomically write metadata.json."""
-    ensure_data_dir()
+    ensure_data_dir(thread_id, author_id)
+    _, _, metadata_file, _ = get_data_paths(thread_id, author_id)
     meta["last_updated"] = _now_iso()
-    tmp = METADATA_FILE.with_suffix(".json.tmp")
+    tmp = metadata_file.with_suffix(".json.tmp")
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
-    tmp.replace(METADATA_FILE)  # atomic rename
+    tmp.replace(metadata_file)  # atomic rename
 
 
 def update_metadata(
     last_scraped_page: int,
+    thread_id: int,
+    author_id: int,
     total_pages: Optional[int] = None,
     total_posts_scraped: Optional[int] = None,
-    thread_id: int = 45974302,
-    author_id: int = 150058,
-    author_name: str = "-阿狼-",
+    author_name: Optional[str] = None,
 ) -> dict:
     """Load, update, and save metadata. Returns the updated dict."""
-    meta = load_metadata()
+    meta = load_metadata(thread_id, author_id)
     meta["thread_id"] = thread_id
     meta["author_id"] = author_id
-    meta["author_name"] = author_name
+    if author_name is not None:
+        meta["author_name"] = author_name
     meta["last_scraped_page"] = last_scraped_page
     if total_pages is not None:
         meta["total_pages"] = total_pages
     if total_posts_scraped is not None:
         meta["total_posts_scraped"] = total_posts_scraped
-    save_metadata(meta)
+    save_metadata(meta, thread_id, author_id)
     return meta
 
 
 # ── JSONL post storage ────────────────────────────────────────────────────────
 
-def load_existing_post_ids() -> set[int]:
+def load_existing_post_ids(thread_id: int, author_id: int) -> set[int]:
     """
     Read posts.jsonl and return the set of all known post_ids.
     Used for deduplication during incremental updates.
     """
+    _, posts_file, _, _ = get_data_paths(thread_id, author_id)
     ids: set[int] = set()
-    if not POSTS_FILE.exists():
+    if not posts_file.exists():
         return ids
-    with POSTS_FILE.open("r", encoding="utf-8") as f:
+    with posts_file.open("r", encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -106,11 +121,12 @@ def load_existing_post_ids() -> set[int]:
     return ids
 
 
-def iter_posts() -> Iterator[dict]:
+def iter_posts(thread_id: int, author_id: int) -> Iterator[dict]:
     """Iterate over all posts in posts.jsonl as dicts."""
-    if not POSTS_FILE.exists():
+    _, posts_file, _, _ = get_data_paths(thread_id, author_id)
+    if not posts_file.exists():
         return
-    with POSTS_FILE.open("r", encoding="utf-8") as f:
+    with posts_file.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -122,7 +138,9 @@ def iter_posts() -> Iterator[dict]:
 
 def append_posts(
     posts: list[Post],
-    existing_ids: Optional[set[int]] = None,
+    existing_ids: Optional[set[int]],
+    thread_id: int,
+    author_id: int,
 ) -> tuple[int, int]:
     """
     Append new posts to posts.jsonl, skipping duplicates.
@@ -131,16 +149,19 @@ def append_posts(
         posts:        List of Post objects to write.
         existing_ids: Set of already-known post_ids for dedup.
                       If None, dedup is skipped (use for full re-scrape).
+        thread_id:    Thread ID (determines storage path).
+        author_id:    Author ID (determines storage path).
 
     Returns:
         (written_count, skipped_count) tuple.
     """
-    ensure_data_dir()
+    ensure_data_dir(thread_id, author_id)
+    _, posts_file, _, _ = get_data_paths(thread_id, author_id)
 
     written = 0
     skipped = 0
 
-    with POSTS_FILE.open("a", encoding="utf-8") as f:
+    with posts_file.open("a", encoding="utf-8") as f:
         for post in posts:
             if existing_ids is not None and post.post_id in existing_ids:
                 skipped += 1
@@ -156,10 +177,11 @@ def append_posts(
     return written, skipped
 
 
-def clear_posts() -> None:
+def clear_posts(thread_id: int, author_id: int) -> None:
     """Delete posts.jsonl for a full re-scrape."""
-    if POSTS_FILE.exists():
-        POSTS_FILE.unlink()
+    _, posts_file, _, _ = get_data_paths(thread_id, author_id)
+    if posts_file.exists():
+        posts_file.unlink()
     logger.info("Cleared posts.jsonl for full re-scrape")
 
 
@@ -189,9 +211,9 @@ def _format_quoted_block(q: dict) -> str:
 
 
 def export_markdown(
-    thread_id: int = 45974302,
-    author_id: int = 150058,
-    author_name: str = "-阿狼-",
+    thread_id: int,
+    author_id: int,
+    author_name: Optional[str] = None,
 ) -> int:
     """
     Read all posts from posts.jsonl and write a human-readable Markdown file.
@@ -199,12 +221,21 @@ def export_markdown(
     Returns:
         Number of posts exported.
     """
-    ensure_data_dir()
-    posts = list(iter_posts())
+    ensure_data_dir(thread_id, author_id)
+    _, _, _, markdown_file = get_data_paths(thread_id, author_id)
+    posts = list(iter_posts(thread_id, author_id))
     # Sort by floor for correct ordering
     posts.sort(key=lambda p: p.get("floor", 0))
 
-    with MARKDOWN_FILE.open("w", encoding="utf-8") as f:
+    # Resolve author_name: use provided value, fall back to what's in metadata,
+    # then fall back to str(author_id)
+    if author_name is None:
+        if posts:
+            author_name = posts[0].get("author_name", str(author_id))
+        else:
+            author_name = str(author_id)
+
+    with markdown_file.open("w", encoding="utf-8") as f:
         f.write(_MD_HEADER.format(
             thread_id=thread_id,
             author_name=author_name,
@@ -242,5 +273,5 @@ def export_markdown(
             else:
                 f.write("\n")
 
-    logger.info("Exported %d posts to %s", len(posts), MARKDOWN_FILE)
+    logger.info("Exported %d posts to %s", len(posts), markdown_file)
     return len(posts)
