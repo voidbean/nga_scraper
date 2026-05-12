@@ -27,6 +27,9 @@ uv run nga-scraper --dry-run --pages 1-1 -v
 # Export collected posts to Markdown
 uv run nga-scraper --export-md
 
+# Watch for new posts (polls every 3 minutes, Ctrl+C to exit)
+uv run nga-scraper --watch
+
 # Run tests
 uv run pytest
 ```
@@ -60,9 +63,10 @@ The pipeline is a linear four-module chain: **scraper → parser → storage**, 
 - `export_markdown(...)`: reads all JSONL posts, sorts by `floor`, and writes `posts.md` with blockquote-formatted `quoted_posts`.
 
 ### `main.py` — CLI orchestration
-- `argparse`-based CLI with mutually exclusive mode flags: `--full`, `--start-page`, `--pages` (incremental is the default).
+- `argparse`-based CLI with mutually exclusive mode flags: `--full`, `--start-page`, `--pages`, `--watch` (incremental is the default).
 - Incremental mode reads `last_scraped_page` from `metadata.json` and resumes from `last + 1`.
 - The scrape loop calls `parse_page` → `append_posts` → `update_metadata` per page, with a progress bar written to stderr.
+- `--watch` mode (`run_watch()`): polls the last page every `WATCH_INTERVAL` (180 s), prints new posts to stdout, and runs until `KeyboardInterrupt`. Single-poll failures are logged as warnings without stopping the loop.
 
 ## Key Implementation Details
 

@@ -80,6 +80,12 @@ uv run nga-scraper --export-md
 # 爬取完成后同时导出 Markdown
 uv run nga-scraper --export-md --pages 1-10
 
+# 持续监听新帖子（每3分钟检查，Ctrl+C 退出）
+uv run nga-scraper --watch
+
+# 监听模式 + 不写入磁盘（测试用）
+uv run nga-scraper --watch --dry-run
+
 # 测试解析（不写入磁盘）
 uv run nga-scraper --dry-run --pages 1-1 -v
 

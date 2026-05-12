@@ -15,9 +15,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 COOKIE_FILE = Path("cookies.txt")
 COOKIE_ENV_VAR = "NGA_COOKIES"
+WATCH_INTERVAL = 180  # 秒，每次轮询间隔
 
 
 def load_cookies(override: Optional[str] = None) -> str:
@@ -95,6 +98,7 @@ def parse_args() -> argparse.Namespace:
   uv run nga-scraper --pages 1-10      # 只爬第1-10页
   uv run nga-scraper --export-md       # 仅导出 Markdown（不爬取）
   uv run nga-scraper --dry-run -v      # 测试解析，不写磁盘
+  uv run nga-scraper --watch           # 监听新帖子（每3分钟检查，Ctrl+C 退出）
         """,
     )
 
@@ -115,6 +119,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         metavar="START-END",
         help="爬取指定页范围，例如 '1-10' 或 '42'",
+    )
+    mode_group.add_argument(
+        "--watch",
+        action="store_true",
+        help="监听新帖子（每3分钟检查，Ctrl+C 退出）",
     )
 
     parser.add_argument(
@@ -211,6 +220,83 @@ def _progress(
         )
 
 
+# ── Watch mode helpers ────────────────────────────────────────────────────────
+
+def _print_new_post(post) -> None:
+    """将一条新帖子格式化打印到 stdout。"""
+    CONTENT_PREVIEW = 300
+    sep = "─" * 60
+    subject = f"【{post.subject}】" if post.subject else ""
+    content_preview = post.content[:CONTENT_PREVIEW]
+    if len(post.content) > CONTENT_PREVIEW:
+        content_preview += "…"
+    print(sep)
+    print(f"  第 {post.floor} 楼 | {post.author_name} | {post.timestamp}")
+    if subject:
+        print(f"  {subject}")
+    print(f"  {content_preview}")
+    print(sep)
+
+
+def run_watch(args: argparse.Namespace) -> None:
+    """持续监听新帖子，每 WATCH_INTERVAL 秒检查一次最后一页。"""
+    cookies = load_cookies(args.cookies)
+    session = build_session(cookies)
+    scraper = NGAScraper(
+        session,
+        thread_id=args.thread_id,
+        author_id=args.author_id,
+        delay=args.delay,
+    )
+
+    existing_ids = load_existing_post_ids(args.thread_id, args.author_id)
+    print(f"[watch] 开始监听，每 {WATCH_INTERVAL} 秒检查一次新帖子。Ctrl+C 退出。\n")
+
+    try:
+        while True:
+            now = datetime.datetime.now().strftime("%H:%M:%S")
+            print(f"[{now}] 检查中...", end=" ", flush=True)
+
+            try:
+                # 首次抓第1页以触发 total_pages 解析；之后直接抓最后一页
+                target_page = scraper.total_pages if scraper.total_pages else 1
+
+                _, html = next(scraper.iter_pages(start=target_page, end=target_page))
+                posts = parse_page(
+                    html,
+                    page_num=target_page,
+                    thread_id=args.thread_id,
+                    author_id=args.author_id,
+                )
+
+                new_posts = [p for p in posts if p.post_id not in existing_ids]
+
+                if new_posts:
+                    print(f"发现 {len(new_posts)} 条新帖子！")
+                    for p in new_posts:
+                        _print_new_post(p)
+                    if not args.dry_run:
+                        append_posts(new_posts, existing_ids, args.thread_id, args.author_id)
+                        update_metadata(
+                            last_scraped_page=target_page,
+                            thread_id=args.thread_id,
+                            author_id=args.author_id,
+                            total_pages=scraper.total_pages,
+                            total_posts_scraped=len(existing_ids),
+                        )
+                else:
+                    print("无新内容。")
+
+            except Exception as e:
+                print(f"检查出错: {e}")
+                logger.debug("watch 轮询异常", exc_info=True)
+
+            time.sleep(WATCH_INTERVAL)
+
+    except KeyboardInterrupt:
+        print("\n\n[watch] 已退出监听。")
+
+
 # ── Main orchestration ────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -218,6 +304,11 @@ def main() -> None:
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    # ── Watch mode ────────────────────────────────────────────────────────────
+    if args.watch:
+        run_watch(args)
+        return
 
     # ── Pure export-only mode (no scraping flags given) ───────────────────────
     if (
