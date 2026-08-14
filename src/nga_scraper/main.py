@@ -225,6 +225,7 @@ def _progress(
 def _print_new_post(post) -> None:
     """将一条新帖子格式化打印到 stdout。"""
     CONTENT_PREVIEW = 300
+    QUOTE_PREVIEW = 100
     sep = "─" * 60
     subject = f"【{post.subject}】" if post.subject else ""
     content_preview = post.content[:CONTENT_PREVIEW]
@@ -234,6 +235,13 @@ def _print_new_post(post) -> None:
     print(f"  第 {post.floor} 楼 | {post.author_name} | {post.timestamp}")
     if subject:
         print(f"  {subject}")
+    for q in post.quoted_posts:
+        who = q.quoted_user or "?"
+        when = f" ({q.quoted_time})" if q.quoted_time else ""
+        q_preview = q.quoted_content[:QUOTE_PREVIEW]
+        if len(q.quoted_content) > QUOTE_PREVIEW:
+            q_preview += "…"
+        print(f"  ┌ 引用 {who}{when}: {q_preview}")
     print(f"  {content_preview}")
     print(sep)
 
@@ -255,7 +263,6 @@ def run_watch(args: argparse.Namespace) -> None:
     try:
         while True:
             now = datetime.datetime.now().strftime("%H:%M:%S")
-            print(f"[{now}] 检查中...", end=" ", flush=True)
 
             try:
                 # 首次抓第1页以触发 total_pages 解析；之后直接抓最后一页
@@ -284,9 +291,6 @@ def run_watch(args: argparse.Namespace) -> None:
                             total_pages=scraper.total_pages,
                             total_posts_scraped=len(existing_ids),
                         )
-                else:
-                    print("无新内容。")
-
             except Exception as e:
                 print(f"检查出错: {e}")
                 logger.debug("watch 轮询异常", exc_info=True)
