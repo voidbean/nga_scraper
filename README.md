@@ -1,9 +1,6 @@
-# NGA BBS 爬虫 — -阿狼- 股票发言 RAG 数据集
+# NGA BBS 爬虫
 
-爬取 NGA 论坛指定帖子中特定用户的所有发言，整理为结构化数据，供 RAG（检索增强生成）使用。支持增量更新，数据以 JSONL 格式持久化，并可导出为 Markdown。
-
-- **目标帖子**：[自立自强，科学技术打头阵](https://bbs.nga.cn/read.php?tid=45974302&authorid=150058&opt=262144)
-- **目标用户**：`-阿狼-`（uid=150058）
+爬取 NGA 论坛任意帖子，整理为结构化数据，供 RAG（检索增强生成）使用。支持按作者过滤、增量更新，数据以 JSONL 格式持久化，并可导出为 Markdown。
 
 ---
 
@@ -32,8 +29,16 @@ uv sync
 # 3. 配置 Cookie（见下方说明）
 echo "your_cookie_string_here" > cookies.txt
 
-# 4. 开始爬取
-uv run nga-scraper
+# 4. 开始爬取（必须指定帖子）
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678"
+```
+
+也可以只爬某个用户的发言：
+
+```bash
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678&authorid=12345"
+# 或
+uv run nga-scraper --thread-id 12345678 --author-id 12345
 ```
 
 ---
@@ -60,60 +65,64 @@ NGA 需要登录态才能正常访问帖子。Cookie 按以下优先级加载：
 
 ## 使用方法
 
+必须通过 `--url` 或 `--thread-id` 指定要爬取的帖子。URL 中若带 `authorid`，则只爬该用户；也可用 `--author-id` 覆盖。省略作者则爬整帖。
+
 ```bash
 # 增量更新（从上次断点继续，推荐日常使用）
-uv run nga-scraper
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678"
 
 # 全量重爬（清空现有数据，从第1页重新开始）
-uv run nga-scraper --full
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --full
 
 # 从指定页开始
-uv run nga-scraper --start-page 50
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --start-page 50
 
 # 只爬指定页范围
-uv run nga-scraper --pages 1-10
-uv run nga-scraper --pages 42
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --pages 1-10
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --pages 42
 
 # 导出所有已爬取内容为 Markdown（不触发爬取）
-uv run nga-scraper --export-md
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --export-md
 
 # 爬取完成后同时导出 Markdown
-uv run nga-scraper --export-md --pages 1-10
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --export-md --pages 1-10
 
 # 持续监听新帖子（每3分钟检查，Ctrl+C 退出）
-uv run nga-scraper --watch
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --watch
 
 # 监听模式 + 不写入磁盘（测试用）
-uv run nga-scraper --watch --dry-run
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --watch --dry-run
 
 # 测试解析（不写入磁盘）
-uv run nga-scraper --dry-run --pages 1-1 -v
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --dry-run --pages 1-1 -v
 
 # 调整请求间隔（默认 1.5 秒）
-uv run nga-scraper --delay 2.0
+uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --delay 2.0
 ```
 
 ---
 
 ## 数据格式
 
-### `data/posts.jsonl`
+数据按帖子分开存放：`data/{tid}/{uid}/`；未指定作者时为 `data/{tid}/all/`。
+
+### `posts.jsonl`
 
 每行一条 JSON 对象，格式如下：
 
 ```json
 {
   "post_id": 854271001,
-  "thread_id": 45974302,
-  "author_id": 150058,
-  "author_name": "-阿狼-",
+  "thread_id": 12345678,
+  "author_id": 12345,
+  "author_name": "示例用户",
   "timestamp": "2026-01-12T09:12:00",
   "subject": "帖子标题（仅楼主帖有，其余为空字符串）",
   "content": "主体文字，已去除引用块和 HTML 标签，纯文本",
   "quoted_posts": [
     {
       "quoted_pid": 854270386,
-      "quoted_tid": 45974302,
+      "quoted_tid": 12345678,
       "quoted_uid": 60027718,
       "quoted_user": "xiaomiwang1",
       "quoted_time": "2026-01-12T09:07:00",
@@ -135,15 +144,15 @@ uv run nga-scraper --delay 2.0
 | `raw_content` | 原始 HTML/UBB 内容（保留备用） |
 | `floor` | 楼层号（全局连续，跨页累计） |
 
-### `data/metadata.json`
+### `metadata.json`
 
 记录爬取状态，用于增量续爬：
 
 ```json
 {
-  "thread_id": 45974302,
-  "author_id": 150058,
-  "author_name": "-阿狼-",
+  "thread_id": 12345678,
+  "author_id": 12345,
+  "author_name": "示例用户",
   "total_pages": 111,
   "last_scraped_page": 80,
   "total_posts_scraped": 1588,
@@ -151,7 +160,7 @@ uv run nga-scraper --delay 2.0
 }
 ```
 
-### `data/posts.md`
+### `posts.md`
 
 人工可读的 Markdown 文件，引用以 blockquote 格式展示，适合直接喂给 AI 工具阅读。
 
@@ -166,7 +175,7 @@ JSONL 文件可直接对接主流向量数据库框架：
 from langchain_community.document_loaders import JSONLoader
 
 loader = JSONLoader(
-    file_path="data/posts.jsonl",
+    file_path="data/12345678/12345/posts.jsonl",
     jq_schema=".content",
     metadata_func=lambda record, _: {
         "post_id": record["post_id"],
@@ -181,7 +190,7 @@ docs = loader.load()
 **LlamaIndex：**
 ```python
 from llama_index.core import SimpleDirectoryReader
-docs = SimpleDirectoryReader(input_files=["data/posts.jsonl"]).load_data()
+docs = SimpleDirectoryReader(input_files=["data/12345678/12345/posts.jsonl"]).load_data()
 ```
 
 **推荐嵌入策略：**
@@ -208,9 +217,10 @@ nga_scraper/
 │       ├── storage.py          # 持久化：JSONL append、metadata 原子写入、Markdown 导出
 │       └── main.py             # CLI 入口：argparse，支持增量/全量/页范围模式
 └── data/                       # ⚠️ 爬取数据（不提交）
-    ├── posts.jsonl
-    ├── metadata.json
-    └── posts.md
+    └── {tid}/{uid 或 all}/
+        ├── posts.jsonl
+        ├── metadata.json
+        └── posts.md
 ```
 
 ---
@@ -220,7 +230,7 @@ nga_scraper/
 | 问题 | 解决方案 |
 |------|----------|
 | NGA 使用 GBK 编码 | `resp.content.decode("gbk", errors="replace")` 强制解码 |
-| 作者名在 JS 中动态加载 | 静态映射 `KNOWN_AUTHORS`，同时扫描页面 JS 补充 |
+| 作者名在 JS 中动态加载 | 扫描页面 `commonui.userInfo.setAll()` 解析 uid→昵称 |
 | UBB `[quote]` 嵌套 | 深度计数器逐字符扫描，只提取最外层 |
 | 增量更新去重 | 启动时加载全部 `post_id` 到 set，append 前检查 |
 | 崩溃恢复 | 每页写完后才更新 `metadata.json`，重启从断点续爬 |

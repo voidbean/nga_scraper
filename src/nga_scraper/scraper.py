@@ -15,6 +15,7 @@ import re
 import time
 import logging
 from typing import Iterator, Optional
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -25,10 +26,6 @@ logger = logging.getLogger(__name__)
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 BASE_URL = "https://bbs.nga.cn/read.php"
-
-# Default target (can be overridden via CLI)
-DEFAULT_THREAD_ID = 45974302
-DEFAULT_AUTHOR_ID = 150058
 
 # Matches: var __PAGE = {0:'/read.php?...',1:111,2:1,3:20};
 _PAGE_RE = re.compile(
@@ -109,14 +106,43 @@ def build_session(
     return session
 
 
+def parse_nga_url(url: str) -> tuple[int, Optional[int]]:
+    """
+    Extract (thread_id, author_id) from an NGA read.php URL.
+
+    Examples:
+        https://bbs.nga.cn/read.php?tid=123
+        https://bbs.nga.cn/read.php?tid=123&authorid=456&opt=262144
+    """
+    parsed = urlparse(url.strip())
+    qs = parse_qs(parsed.query)
+    tid_values = qs.get("tid") or []
+    if not tid_values:
+        raise ValueError(f"URL 中缺少 tid 参数: {url!r}")
+    try:
+        thread_id = int(tid_values[0])
+    except ValueError as exc:
+        raise ValueError(f"无效的 tid 参数: {tid_values[0]!r}") from exc
+
+    author_id: Optional[int] = None
+    aid_values = qs.get("authorid") or []
+    if aid_values:
+        try:
+            author_id = int(aid_values[0])
+        except ValueError as exc:
+            raise ValueError(f"无效的 authorid 参数: {aid_values[0]!r}") from exc
+
+    return thread_id, author_id
+
+
 # ── Page fetcher ──────────────────────────────────────────────────────────────
 
 class NGAScraper:
     """
-    Fetches pages from a single NGA thread filtered by author.
+    Fetches pages from a single NGA thread, optionally filtered by author.
 
     Usage:
-        scraper = NGAScraper(session, thread_id=45974302, author_id=150058)
+        scraper = NGAScraper(session, thread_id=123, author_id=456)
         html = scraper.fetch_page(1)
         total = scraper.total_pages  # populated after first fetch
     """
@@ -124,8 +150,8 @@ class NGAScraper:
     def __init__(
         self,
         session: requests.Session,
-        thread_id: int = DEFAULT_THREAD_ID,
-        author_id: int = DEFAULT_AUTHOR_ID,
+        thread_id: int,
+        author_id: Optional[int] = None,
         delay: float = 1.5,
         timeout: int = 30,
     ) -> None:
@@ -144,13 +170,11 @@ class NGAScraper:
             time.sleep(self.delay - elapsed)
 
     def _page_url(self, page: int) -> str:
-        return (
-            f"{BASE_URL}"
-            f"?tid={self.thread_id}"
-            f"&authorid={self.author_id}"
-            f"&opt=262144"
-            f"&page={page}"
-        )
+        params = [f"tid={self.thread_id}"]
+        if self.author_id is not None:
+            params.append(f"authorid={self.author_id}")
+        params.extend(["opt=262144", f"page={page}"])
+        return f"{BASE_URL}?{'&'.join(params)}"
 
     def fetch_page(self, page: int) -> str:
         """

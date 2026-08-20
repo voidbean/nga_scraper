@@ -2,14 +2,15 @@
 CLI entry point for the NGA scraper.
 
 Usage:
-    uv run nga-scraper                    # incremental update
-    uv run nga-scraper --full             # full re-scrape
-    uv run nga-scraper --start-page 50   # start from page 50
-    uv run nga-scraper --pages 1-10      # scrape pages 1 through 10
-    uv run nga-scraper --export-md       # export to markdown only
-    uv run nga-scraper --cookies "..."   # override cookies inline
-    uv run nga-scraper --dry-run         # parse but don't write to disk
-    uv run nga-scraper -v                # verbose logging
+    uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=123"
+    uv run nga-scraper --thread-id 123 --author-id 456
+    uv run nga-scraper --url "..." --full
+    uv run nga-scraper --url "..." --start-page 50
+    uv run nga-scraper --url "..." --pages 1-10
+    uv run nga-scraper --url "..." --export-md
+    uv run nga-scraper --url "..." --cookies "..."
+    uv run nga-scraper --url "..." --dry-run
+    uv run nga-scraper --url "..." -v
 """
 
 from __future__ import annotations
@@ -23,12 +24,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .scraper import NGAScraper, build_session, DEFAULT_THREAD_ID, DEFAULT_AUTHOR_ID
+from .scraper import NGAScraper, build_session, parse_nga_url
 from .parser import parse_page
 from .storage import (
     append_posts,
     clear_posts,
     export_markdown,
+    get_data_paths,
     load_existing_post_ids,
     load_metadata,
     update_metadata,
@@ -88,18 +90,40 @@ def load_cookies(override: Optional[str] = None) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="nga-scraper",
-        description="爬取 NGA BBS 帖子，整理为 RAG 可用的结构化数据",
+        description="爬取任意 NGA BBS 帖子，整理为 RAG 可用的结构化数据",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  uv run nga-scraper                    # 增量更新（从上次断点继续）
-  uv run nga-scraper --full             # 全量重爬（清空重来）
-  uv run nga-scraper --start-page 50   # 从第50页开始
-  uv run nga-scraper --pages 1-10      # 只爬第1-10页
-  uv run nga-scraper --export-md       # 仅导出 Markdown（不爬取）
-  uv run nga-scraper --dry-run -v      # 测试解析，不写磁盘
-  uv run nga-scraper --watch           # 监听新帖子（每3分钟检查，Ctrl+C 退出）
+  uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=123"
+  uv run nga-scraper --thread-id 123 --author-id 456   # 只看该用户发言
+  uv run nga-scraper --url "..." --full                 # 全量重爬
+  uv run nga-scraper --url "..." --start-page 50        # 从第50页开始
+  uv run nga-scraper --url "..." --pages 1-10           # 只爬第1-10页
+  uv run nga-scraper --url "..." --export-md            # 仅导出 Markdown
+  uv run nga-scraper --url "..." --dry-run -v           # 测试解析，不写磁盘
+  uv run nga-scraper --url "..." --watch                # 监听新帖子
         """,
+    )
+
+    target_group = parser.add_mutually_exclusive_group(required=True)
+    target_group.add_argument(
+        "--url",
+        type=str,
+        metavar="NGA_URL",
+        help="帖子 URL，例如 https://bbs.nga.cn/read.php?tid=123 ；若含 authorid 则只爬该用户",
+    )
+    target_group.add_argument(
+        "--thread-id",
+        type=int,
+        metavar="TID",
+        help="帖子 TID",
+    )
+    parser.add_argument(
+        "--author-id",
+        type=int,
+        default=None,
+        metavar="UID",
+        help="只看该 UID 的发言（可覆盖 URL 中的 authorid；省略则爬整帖）",
     )
 
     mode_group = parser.add_mutually_exclusive_group()
@@ -129,7 +153,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--export-md",
         action="store_true",
-        help="将所有已爬取帖子导出为 data/posts.md（可与爬取同时使用）",
+        help="将所有已爬取帖子导出为 Markdown（可与爬取同时使用）",
     )
     parser.add_argument(
         "--cookies",
@@ -146,18 +170,6 @@ def parse_args() -> argparse.Namespace:
         help="请求间隔秒数（默认 1.5s）",
     )
     parser.add_argument(
-        "--thread-id",
-        type=int,
-        default=DEFAULT_THREAD_ID,
-        help=f"帖子 TID（默认 {DEFAULT_THREAD_ID}）",
-    )
-    parser.add_argument(
-        "--author-id",
-        type=int,
-        default=DEFAULT_AUTHOR_ID,
-        help=f"只看该 UID 的发言（默认 {DEFAULT_AUTHOR_ID}）",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="只解析，不写入磁盘（用于测试）",
@@ -169,6 +181,25 @@ def parse_args() -> argparse.Namespace:
     )
 
     return parser.parse_args()
+
+
+def resolve_target(args: argparse.Namespace) -> None:
+    """Fill args.thread_id / args.author_id from --url when provided."""
+    if not args.url:
+        return
+    try:
+        thread_id, url_author_id = parse_nga_url(args.url)
+    except ValueError as exc:
+        print(f"无效的帖子 URL: {exc}", file=sys.stderr)
+        sys.exit(2)
+    args.thread_id = thread_id
+    if args.author_id is None:
+        args.author_id = url_author_id
+
+
+def _data_md_path(thread_id: int, author_id: Optional[int]) -> Path:
+    *_, markdown_file = get_data_paths(thread_id, author_id)
+    return markdown_file
 
 
 # ── Page range parsing ────────────────────────────────────────────────────────
@@ -248,6 +279,7 @@ def _print_new_post(post) -> None:
 
 def run_watch(args: argparse.Namespace) -> None:
     """持续监听新帖子，每 WATCH_INTERVAL 秒检查一次最后一页。"""
+    resolve_target(args)
     cookies = load_cookies(args.cookies)
     session = build_session(cookies)
     scraper = NGAScraper(
@@ -305,6 +337,12 @@ def run_watch(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = parse_args()
+    resolve_target(args)
+    logger.info(
+        "目标帖子 tid=%s authorid=%s",
+        args.thread_id,
+        args.author_id if args.author_id is not None else "全部",
+    )
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -325,7 +363,7 @@ def main() -> None:
             thread_id=args.thread_id,
             author_id=args.author_id,
         )  # author_name resolved from posts data automatically
-        print(f"已导出 {count} 条帖子到 data/posts.md")
+        print(f"已导出 {count} 条帖子到 {_data_md_path(args.thread_id, args.author_id)}")
         return
 
     # ── Determine page range ──────────────────────────────────────────────────
@@ -456,4 +494,4 @@ def main() -> None:
             thread_id=args.thread_id,
             author_id=args.author_id,
         )  # author_name resolved from posts data automatically
-        print(f"已导出 {count} 条帖子到 data/posts.md")
+        print(f"已导出 {count} 条帖子到 {_data_md_path(args.thread_id, args.author_id)}")

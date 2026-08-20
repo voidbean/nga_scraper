@@ -5,7 +5,7 @@ Responsibilities:
 - Extract post metadata (pid, timestamp, subject, floor)
 - Clean HTML content to plain text
 - Parse nested UBB quote blocks into structured objects
-- Resolve author name from known uid mapping or JS userInfo
+- Resolve author name from the page's JS userInfo blob
 """
 
 from __future__ import annotations
@@ -56,14 +56,9 @@ class Post:
         return d
 
 
-# ── Known author map (uid -> name) ────────────────────────────────────────────
+# ── Author name resolution ────────────────────────────────────────────────────
 # NGA loads author names via JS; the <a> tag is empty in raw HTML.
-# We maintain a small static map for the target author and populate
-# others from the JS userInfo blob if present.
-
-KNOWN_AUTHORS: dict[int, str] = {
-    150058: "-阿狼-",
-}
+# Names are resolved from the page's commonui.userInfo.setAll() blob.
 
 # Matches: commonui.userInfo.setAll("uid\tname\t...", ...)
 _USERINFO_RE = re.compile(
@@ -80,7 +75,7 @@ def extract_known_authors(html: str) -> dict[int, str]:
         "uid\\tname\\tregdate\\t..."
     Multiple users may appear in one call, separated by \\n.
     """
-    authors: dict[int, str] = dict(KNOWN_AUTHORS)  # start with static map
+    authors: dict[int, str] = {}
 
     for m in _USERINFO_RE.finditer(html):
         blob = m.group(1)
@@ -102,7 +97,7 @@ def extract_known_authors(html: str) -> dict[int, str]:
 # ── UBB Quote parser ──────────────────────────────────────────────────────────
 
 # Matches the opening of a quote block:
-# [quote][pid=854270386,45974302,3]Reply[/pid] [b]Post by [uid=60027718]xiaomiwang1[/uid] (2026-01-12 09:07):[/b]
+# [quote][pid=PID,TID,FLOOR]Reply[/pid] [b]Post by [uid=UID]username[/uid] (YYYY-MM-DD HH:MM):[/b]
 _QUOTE_HEADER_RE = re.compile(
     r'\[quote\]'
     r'(?:\[pid=(\d+),(\d+),\d+\]Reply\[/pid\]\s*)?'   # optional [pid=...]
@@ -310,7 +305,7 @@ def parse_page(
     html: str,
     page_num: int,
     thread_id: int,
-    author_id: int,
+    author_id: Optional[int] = None,
     page_size: int = 20,
 ) -> list[Post]:
     """
@@ -320,7 +315,7 @@ def parse_page(
         html:       Decoded HTML string (already GBK-decoded).
         page_num:   1-based page number (used for floor calculation).
         thread_id:  Thread ID for metadata.
-        author_id:  Author ID for metadata.
+        author_id:  If set, skip posts whose author uid does not match.
         page_size:  Posts per page (default 20, from NGA's __PAGE JS).
 
     Returns:
@@ -351,17 +346,20 @@ def parse_page(
         # Floor is 1-based, cumulative across all pages
         floor = (page_num - 1) * page_size + post_index + 1
 
-        # Verify this post belongs to our target author
+        # Resolve this post's author uid from the profile link
+        post_author_id = author_id if author_id is not None else 0
         author_link = row.find('a', id=f'postauthor{post_index}')
         if author_link:
             href = author_link.get('href', '')
             uid_m = _UID_RE.search(href)
-            if uid_m and int(uid_m.group(1)) != author_id:
-                logger.warning(
-                    "Unexpected author uid=%s on page %d index %d — skipping",
-                    uid_m.group(1), page_num, post_index
-                )
-                continue
+            if uid_m:
+                post_author_id = int(uid_m.group(1))
+                if author_id is not None and post_author_id != author_id:
+                    logger.warning(
+                        "Unexpected author uid=%s on page %d index %d — skipping",
+                        post_author_id, page_num, post_index
+                    )
+                    continue
 
         # Get the post container td
         container = row.find('td', id=f'postcontainer{post_index}')
@@ -393,16 +391,13 @@ def parse_page(
             quoted_posts = []
             content = ""
 
-        # Resolve author name
-        author_name = author_map.get(
-            author_id,
-            KNOWN_AUTHORS.get(author_id, str(author_id))
-        )
+        # Resolve author name from the JS userInfo map; fall back to uid
+        author_name = author_map.get(post_author_id, str(post_author_id))
 
         posts.append(Post(
             post_id=post_id,
             thread_id=thread_id,
-            author_id=author_id,
+            author_id=post_author_id,
             author_name=author_name,
             timestamp=timestamp,
             subject=subject,

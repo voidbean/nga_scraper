@@ -2,9 +2,9 @@
 Persistence layer for scraped NGA posts.
 
 Storage format:
-  data/posts.jsonl      — one JSON object per line, append-only
-  data/metadata.json    — scrape state and statistics
-  data/posts.md         — human-readable Markdown export
+  data/{tid}/{uid or all}/posts.jsonl  — one JSON object per line, append-only
+  data/{tid}/{uid or all}/metadata.json — scrape state and statistics
+  data/{tid}/{uid or all}/posts.md      — human-readable Markdown export
 
 JSONL is chosen for RAG because:
   - Trivially appendable (no need to rewrite the whole file)
@@ -27,14 +27,16 @@ logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-def get_data_paths(thread_id: int, author_id: int) -> tuple[Path, Path, Path, Path]:
+def get_data_paths(thread_id: int, author_id: Optional[int] = None) -> tuple[Path, Path, Path, Path]:
     """
     Return (data_dir, posts_file, metadata_file, markdown_file) for the given
     thread/author combination.
 
-    Layout: data/{thread_id}/{author_id}/
+    Layout: data/{thread_id}/{author_id}/  or  data/{thread_id}/all/ when
+    scraping the whole thread without an author filter.
     """
-    data_dir = Path("data") / str(thread_id) / str(author_id)
+    author_key = str(author_id) if author_id is not None else "all"
+    data_dir = Path("data") / str(thread_id) / author_key
     return (
         data_dir,
         data_dir / "posts.jsonl",
@@ -47,14 +49,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def ensure_data_dir(thread_id: int, author_id: int) -> None:
+def ensure_data_dir(thread_id: int, author_id: Optional[int] = None) -> None:
     data_dir, *_ = get_data_paths(thread_id, author_id)
     data_dir.mkdir(parents=True, exist_ok=True)
 
 
 # ── Metadata ──────────────────────────────────────────────────────────────────
 
-def load_metadata(thread_id: int, author_id: int) -> dict:
+def load_metadata(thread_id: int, author_id: Optional[int] = None) -> dict:
     """Load metadata.json, returning empty dict if it doesn't exist."""
     _, _, metadata_file, _ = get_data_paths(thread_id, author_id)
     if metadata_file.exists():
@@ -63,7 +65,7 @@ def load_metadata(thread_id: int, author_id: int) -> dict:
     return {}
 
 
-def save_metadata(meta: dict, thread_id: int, author_id: int) -> None:
+def save_metadata(meta: dict, thread_id: int, author_id: Optional[int] = None) -> None:
     """Atomically write metadata.json."""
     ensure_data_dir(thread_id, author_id)
     _, _, metadata_file, _ = get_data_paths(thread_id, author_id)
@@ -77,7 +79,7 @@ def save_metadata(meta: dict, thread_id: int, author_id: int) -> None:
 def update_metadata(
     last_scraped_page: int,
     thread_id: int,
-    author_id: int,
+    author_id: Optional[int] = None,
     total_pages: Optional[int] = None,
     total_posts_scraped: Optional[int] = None,
     author_name: Optional[str] = None,
@@ -99,7 +101,7 @@ def update_metadata(
 
 # ── JSONL post storage ────────────────────────────────────────────────────────
 
-def load_existing_post_ids(thread_id: int, author_id: int) -> set[int]:
+def load_existing_post_ids(thread_id: int, author_id: Optional[int] = None) -> set[int]:
     """
     Read posts.jsonl and return the set of all known post_ids.
     Used for deduplication during incremental updates.
@@ -121,7 +123,7 @@ def load_existing_post_ids(thread_id: int, author_id: int) -> set[int]:
     return ids
 
 
-def iter_posts(thread_id: int, author_id: int) -> Iterator[dict]:
+def iter_posts(thread_id: int, author_id: Optional[int] = None) -> Iterator[dict]:
     """Iterate over all posts in posts.jsonl as dicts."""
     _, posts_file, _, _ = get_data_paths(thread_id, author_id)
     if not posts_file.exists():
@@ -140,7 +142,7 @@ def append_posts(
     posts: list[Post],
     existing_ids: Optional[set[int]],
     thread_id: int,
-    author_id: int,
+    author_id: Optional[int] = None,
 ) -> tuple[int, int]:
     """
     Append new posts to posts.jsonl, skipping duplicates.
@@ -150,7 +152,7 @@ def append_posts(
         existing_ids: Set of already-known post_ids for dedup.
                       If None, dedup is skipped (use for full re-scrape).
         thread_id:    Thread ID (determines storage path).
-        author_id:    Author ID (determines storage path).
+        author_id:    Author ID filter (determines storage path; None → all/).
 
     Returns:
         (written_count, skipped_count) tuple.
@@ -177,7 +179,7 @@ def append_posts(
     return written, skipped
 
 
-def clear_posts(thread_id: int, author_id: int) -> None:
+def clear_posts(thread_id: int, author_id: Optional[int] = None) -> None:
     """Delete posts.jsonl for a full re-scrape."""
     _, posts_file, _, _ = get_data_paths(thread_id, author_id)
     if posts_file.exists():
@@ -187,14 +189,32 @@ def clear_posts(thread_id: int, author_id: int) -> None:
 
 # ── Markdown export ───────────────────────────────────────────────────────────
 
-_MD_HEADER = """\
-# NGA 帖子 {thread_id} — {author_name}（uid={author_id}）的发言
+def _thread_url(thread_id: int, author_id: Optional[int] = None) -> str:
+    url = f"https://bbs.nga.cn/read.php?tid={thread_id}"
+    if author_id is not None:
+        url += f"&authorid={author_id}&opt=262144"
+    return url
 
-> 导出时间：{exported_at}
-> 帖子总数：{total_posts}
-> 原帖地址：https://bbs.nga.cn/read.php?tid={thread_id}&authorid={author_id}&opt=262144
 
-"""
+def _md_header(
+    thread_id: int,
+    author_id: Optional[int],
+    author_name: str,
+    exported_at: str,
+    total_posts: int,
+) -> str:
+    url = _thread_url(thread_id, author_id)
+    if author_id is not None:
+        title = f"# NGA 帖子 {thread_id} — {author_name}（uid={author_id}）的发言"
+    else:
+        title = f"# NGA 帖子 {thread_id}"
+    return (
+        f"{title}\n\n"
+        f"> 导出时间：{exported_at}\n"
+        f"> 帖子总数：{total_posts}\n"
+        f"> 原帖地址：{url}\n\n"
+    )
+
 
 _MD_SEPARATOR = "\n\n---\n\n"
 
@@ -212,7 +232,7 @@ def _format_quoted_block(q: dict) -> str:
 
 def export_markdown(
     thread_id: int,
-    author_id: int,
+    author_id: Optional[int] = None,
     author_name: Optional[str] = None,
 ) -> int:
     """
@@ -231,15 +251,17 @@ def export_markdown(
     # then fall back to str(author_id)
     if author_name is None:
         if posts:
-            author_name = posts[0].get("author_name", str(author_id))
+            author_name = posts[0].get("author_name") or (
+                str(author_id) if author_id is not None else ""
+            )
         else:
-            author_name = str(author_id)
+            author_name = str(author_id) if author_id is not None else ""
 
     with markdown_file.open("w", encoding="utf-8") as f:
-        f.write(_MD_HEADER.format(
+        f.write(_md_header(
             thread_id=thread_id,
-            author_name=author_name,
             author_id=author_id,
+            author_name=author_name,
             exported_at=_now_iso(),
             total_posts=len(posts),
         ))
