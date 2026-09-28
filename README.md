@@ -31,6 +31,7 @@ echo "your_cookie_string_here" > cookies.txt
 
 # 4. 开始爬取（必须指定帖子）
 uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678"
+uv run nga-scraper --thread-id 12345678
 ```
 
 也可以只爬某个用户的发言：
@@ -70,6 +71,7 @@ NGA 需要登录态才能正常访问帖子。Cookie 按以下优先级加载：
 ```bash
 # 增量更新（从上次断点继续，推荐日常使用）
 uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678"
+uv run nga-scraper --thread-id 12345678
 
 # 全量重爬（清空现有数据，从第1页重新开始）
 uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --full
