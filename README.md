@@ -104,6 +104,11 @@ uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678" --delay 2.0
 
 ## 数据格式
 
+`--export-md` 会将正文和引用中形如 `./mon_202609/28/example.jpg` 的 NGA
+图片相对路径补全为 `https://img.nga.cn/attachments/mon_202609/28/example.jpg`，
+并转换为独立的 Markdown 图片。支持 JPG/JPEG、PNG、GIF、WebP 和 BMP。
+已有数据只需重新导出，无需重爬；原始 JSONL 保持不变。图片仍由远程服务器加载，不会下载到本地。
+
 数据按帖子分开存放：`data/{tid}/{uid}/`；未指定作者时为 `data/{tid}/all/`。
 
 ### `posts.jsonl`

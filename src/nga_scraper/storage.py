@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
@@ -218,12 +219,31 @@ def _md_header(
 
 _MD_SEPARATOR = "\n\n---\n\n"
 
+# Cleaned UBB images retain their attachment paths, sometimes touching prose
+# or the next image. Restrict matching to NGA paths and known image extensions.
+_NGA_IMAGE_RE = re.compile(
+    r"(?<![/.:])\./(?P<path>mon_\d{6}/\d{2}/"
+    r"[A-Za-z0-9_-]+\.(?:jpe?g|png|gif|webp|bmp))"
+    r"(?![A-Za-z0-9_]|\.[A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def _format_content_images(content: str) -> str:
+    """Render legacy relative image paths without changing stored JSONL data."""
+    if not _NGA_IMAGE_RE.search(content):
+        return content
+    return _NGA_IMAGE_RE.sub(
+        lambda m: f"\n\n![图片](https://img.nga.cn/attachments/{m['path']})\n\n",
+        content,
+    ).strip()
+
 
 def _format_quoted_block(q: dict) -> str:
     """Format a single quoted post as a Markdown blockquote."""
     user = q.get("quoted_user") or f"uid={q.get('quoted_uid', '?')}"
     ts = q.get("quoted_time", "")
-    content = q.get("quoted_content", "")
+    content = _format_content_images(q.get("quoted_content", ""))
     lines = [f"> **{user}** ({ts}) 写道：", ">"]
     for line in content.split("\n"):
         lines.append(f"> {line}" if line.strip() else ">")
@@ -270,7 +290,7 @@ def export_markdown(
             subject = post.get("subject", "")
             floor = post.get("floor", "?")
             timestamp = post.get("timestamp", "")
-            content = post.get("content", "")
+            content = _format_content_images(post.get("content", ""))
             post_id = post.get("post_id", "")
             page = post.get("page", "")
 
