@@ -69,7 +69,7 @@ NGA 需要登录态才能正常访问帖子。Cookie 按以下优先级加载：
 必须通过 `--url` 或 `--thread-id` 指定要爬取的帖子。URL 中若带 `authorid`，则只爬该用户；也可用 `--author-id` 覆盖。省略作者则爬整帖。
 
 ```bash
-# 增量更新（从上次断点继续，推荐日常使用）
+# 增量更新（重查上次断点页，再继续后续页；自动去重，推荐日常使用）
 uv run nga-scraper --url "https://bbs.nga.cn/read.php?tid=12345678"
 uv run nga-scraper --thread-id 12345678
 

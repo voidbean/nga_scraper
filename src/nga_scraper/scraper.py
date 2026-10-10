@@ -219,13 +219,20 @@ class NGAScraper:
             end:   Last page to fetch (inclusive). If None, fetches until
                    total_pages (discovered from the first response).
         """
-        # Fetch the first page to discover total_pages if end is unknown
+        # Discover the server's page limit before yielding any response.
+        # NGA may return content even for an out-of-range request.
         html = self.fetch_page(start)
-        yield start, html
-
-        # Determine the actual end page
+        if self.total_pages is not None:
+            if start > self.total_pages:
+                logger.info("起始页 %d 超出总页数 %d，停止爬取", start, self.total_pages)
+                return
+            end = min(end, self.total_pages) if end is not None else self.total_pages
         if end is None:
-            end = self.total_pages or start  # fallback: just the one page
+            end = start  # fallback: just the one page
+        if start > end:
+            return
+
+        yield start, html
 
         for page in range(start + 1, end + 1):
             html = self.fetch_page(page)

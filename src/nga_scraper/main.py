@@ -390,10 +390,15 @@ def main() -> None:
         logger.info("从第 %d 页开始爬取", start_page)
 
     else:
-        # Incremental: resume from last scraped page + 1
+        # Revisit the checkpoint page: it may have gained replies since the
+        # last run. Existing post IDs keep this overlap duplicate-free.
         meta = load_metadata(args.thread_id, args.author_id)
         last = meta.get("last_scraped_page", 0)
-        start_page = last + 1 if last > 0 else 1
+        start_page = max(1, last)
+        # Recover checkpoints advanced past the end by older versions.
+        known_total = meta.get("total_pages")
+        if known_total and known_total > 0:
+            start_page = min(start_page, known_total)
         existing_ids = load_existing_post_ids(args.thread_id, args.author_id)
         if last > 0:
             logger.info(

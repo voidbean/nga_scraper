@@ -67,7 +67,7 @@ The pipeline is a linear four-module chain: **scraper → parser → storage**, 
 
 ### `main.py` — CLI orchestration
 - `argparse`-based CLI with mutually exclusive mode flags: `--full`, `--start-page`, `--pages`, `--watch` (incremental is the default).
-- Incremental mode reads `last_scraped_page` from `metadata.json` and resumes from `last + 1`.
+- Incremental mode revisits `last_scraped_page` from `metadata.json` to capture new replies on that page, then continues with deduplication. Legacy out-of-range checkpoints are capped at the saved `total_pages`; the iterator also bounds yielded pages by the server's total.
 - The scrape loop calls `parse_page` → `append_posts` → `update_metadata` per page, with a progress bar written to stderr.
 - `--watch` mode (`run_watch()`): polls the last page every `WATCH_INTERVAL` (180 s), prints new posts to stdout, and runs until `KeyboardInterrupt`. Single-poll failures are logged as warnings without stopping the loop.
 
